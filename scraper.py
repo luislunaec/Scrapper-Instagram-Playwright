@@ -9,7 +9,7 @@ from playwright.async_api import async_playwright
 TARGET_PROFILE = "amarantavp"          
 OUTPUT_JSON = "amarantavp_limpio.json" 
 
-TU_SESSION = "78502088557:g9UdNvtwGssxUa:22:AYjgwaoeV-fi1UA--Y_cYpgy2zGAzneGEyRiPg27Uw"
+TU_SESSION = "78502088557%3Ag9UdNvtwGssxUa%3A22%3AAYgtbCby0F38d4q61q_ffMDFzGy9d0KANIepash_HQ"
 
 class InstagramQuimera:
     def __init__(self, session_id):
@@ -90,7 +90,7 @@ class InstagramQuimera:
             skip = {"responder", "reply", "me gusta", "like", "ver traducción", "view translation", "ver respuestas", "view replies"}
 
             for item in results:
-                if len(comments) >= 3: 
+                if len(comments) >= 10: 
                     break
                     
                 author = item.get("author", "").strip()
