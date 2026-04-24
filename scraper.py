@@ -1,157 +1,174 @@
-import time
-import random
+
+import asyncio
 import json
-import pandas as pd
-import concurrent.futures
-from playwright.sync_api import sync_playwright
+import re
+import random
+from datetime import datetime
+from playwright.async_api import async_playwright
 
-# --- CONFIGURACIÓN ---
-SESSION_ID = "77936143036%3AY0cNxGMpaRB6b8%3A17%3AAYjD3tfacMkTj2rangfvySHzA7Imm8Lh7cwkzLIUvw" 
+TARGET_PROFILE = "amarantavp"          
+OUTPUT_JSON = "amarantavp_limpio.json" 
 
-def get_instagram_context(playwright, session_id):
-    browser = playwright.chromium.launch(headless=True) 
-    context = browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-    )
-    context.add_cookies([{
-        'name': 'sessionid',
-        'value': session_id,
-        'domain': '.instagram.com',
-        'path': '/'
-    }])
-    return browser, context
+TU_SESSION = "78502088557:g9UdNvtwGssxUa:22:AYjgwaoeV-fi1UA--Y_cYpgy2zGAzneGEyRiPg27Uw"
 
-def fetch_data_from_page(url, session_id):
-    """ Función universal para pedir datos desde el contexto real del navegador """
-    with sync_playwright() as p:
-        browser, context = get_instagram_context(p, session_id)
-        page = context.new_page()
+class InstagramQuimera:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.posts = []
+
+    async def get_post_links(self, page, profile: str, limit: int = 10) -> list[str]:
+        print(f"[→] Entrando en modo sigilo a @{profile}...")
+        await page.goto(f"https://www.instagram.com/{profile}/", wait_until="networkidle")
+        await asyncio.sleep(4)
+
+        for _ in range(4):
+            await page.keyboard.press("End")
+            await asyncio.sleep(random.uniform(1.5, 2.5))
+
+        links = await page.eval_on_selector_all(
+            'a[href*="/p/"], a[href*="/reel/"]',
+            "els => [...new Set(els.map(e => e.href))]"
+        )
+
+        post_links = [l for l in links if "/p/" in l or "/reel/" in l][:limit]
+        print(f"[✓] {len(post_links)} posts interceptados")
+        return post_links
+
+    async def extract_caption_and_comments(self, page, target_author: str) -> tuple[str, list[dict]]:
+        caption = "Sin descripción"
+        comments = []
+
         try:
-            # Primero vamos al home para validar la sesión
-            page.goto("https://www.instagram.com/", wait_until="networkidle")
-            
-            # Ahora pedimos los datos usando el fetch interno del navegador (evita el Error 400)
-            data = page.evaluate(f'''async () => {{
-                const response = await fetch('{url}', {{
-                    headers: {{ 'x-ig-app-id': '936619743392459' }}
-                }});
-                return await response.json();
-            }}''')
-            return data
-        except Exception as e:
-            print(f"⚠️ Error en la petición: {e}")
-            return None
-        finally:
-            browser.close()
+            await page.wait_for_selector("span._ap3a", timeout=8000)
+        except Exception:
+            return caption, comments
 
-def get_user_details_pw(username, session_id):
-    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    res = fetch_data_from_page(url, session_id)
-    if res and 'data' in res:
-        user = res['data'].get('user')
-        if user:
-            return {
-                'Usuario': user.get('username'),
-                'ID': user.get('id'),
-                'Seguidores': user.get('edge_followed_by', {}).get('count', 0),
-                'Seguidos': user.get('edge_follow', {}).get('count', 0),
-                'Privada': user.get('is_private', False)
-            }
-    return None
+        await asyncio.sleep(2)
 
-def get_followings_list_pw(target_username, session_id):
-    target_info = get_user_details_pw(target_username, session_id)
-    if not target_info: return []
-
-    target_id = target_info['ID']
-    total_estimado = target_info['Seguidos']
-    all_usernames = []
-    max_id = ""
-    last_max_id = None # Seguro 1: Para ver si se repite
-    
-    print(f"🔎 Objetivo: {target_username} | Siguiendo (aprox): {total_estimado}")
-
-    while True:
-        url = f"https://www.instagram.com/api/v1/friendships/{target_id}/following/?count=50"
-        if max_id: url += f"&max_id={max_id}"
-        
-        data = fetch_data_from_page(url, session_id)
-        
-        # Seguro 2: Si no hay data o no hay usuarios, fuera.
-        if not data or 'users' not in data or len(data['users']) == 0:
-            print("🏁 No hay más usuarios o Instagram cortó el flujo.")
-            break
-            
-        for u in data['users']:
-            uname = u.get('username')
-            if uname not in all_usernames: # Evitamos duplicados en la lista
-                all_usernames.append(uname)
-            
-        print(f"✅ Recuperados: {len(all_usernames)} únicos...")
-
-        # Seguro 3: Si el max_id es el mismo que el anterior, estamos en un bucle
-        new_max_id = data.get('next_max_id')
-        if not new_max_id or new_max_id == last_max_id:
-            print("🏁 Fin de la paginación alcanzado.")
-            break
-            
-        # Seguro 4: Límite de seguridad (Si David sigue a 150, pero ya vamos 1000, algo está mal)
-        if len(all_usernames) > (total_estimado + 100) and total_estimado > 0:
-            print("⚠️ Límite de seguridad alcanzado (posible error de API).")
-            break
-
-        last_max_id = new_max_id
-        max_id = new_max_id
-        time.sleep(random.uniform(2, 4))
-        
-    return list(set(all_usernames)) # Retornamos solo únicos por si acaso
-
-def main():
-    target = input("👤 Usuario a scrapear (sin @): ").strip()
-    
-    print(f"--- [FASE 1] Iniciando obtención de lista ---")
-    lista_seguidos = get_followings_list_pw(target, SESSION_ID)
-    
-    if not lista_seguidos:
-        print("❌ Error: No se obtuvo lista. Terminando.")
-        return
-
-    print(f"--- [FASE 2] Lista obtenida: {len(lista_seguidos)} perfiles ---")
-    print(f"--- [FASE 3] Iniciando extracción de detalles (UNO POR UNO para evitar crasheos) ---")
-    
-    datos_finales = []
-    total = len(lista_seguidos)
-
-    for i, user in enumerate(lista_seguidos, 1):
+        # CAPTION: Usando la clase mágica de tu amigo
         try:
-            print(f"🔍 [{i}/{total}] Analizando a: {user}...", end="\r")
-            res = get_user_details_pw(user, SESSION_ID)
-            if res:
-                datos_finales.append(res)
-            
-            # Cada 10 perfiles, guardamos un "backup" temporal por si se muere
-            if i % 10 == 0:
-                print(f"\n💾 Guardando progreso temporal ({i} perfiles)...")
-                pd.DataFrame(datos_finales).to_excel(f"BACKUP_{target}.xlsx", index=False)
+            cap_el = page.locator('span.x126k92a').first
+            if await cap_el.count():
+                caption = (await cap_el.inner_text()).strip()
+        except Exception:
+            pass
+
+        try:
+            results = await page.evaluate("""() => {
+                const out = [];
+                const allAp3a = document.querySelectorAll('span._ap3a');
+
+                for (const ap3a of allAp3a) {
+                    let container = ap3a;
+                    let level = 0;
+
+                    while (container.parentElement && level < 15) {
+                        container = container.parentElement;
+                        level++;
+                        const spans = container.querySelectorAll('span[dir="auto"]');
+
+                        if (level <= 10 && spans.length >= 4) {
+                            const author = spans[1] ? spans[1].innerText.trim() : '';
+                            const text   = spans[3] ? spans[3].innerText.trim() : '';
+                            if (author && text) {
+                                out.push({ author, text });
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                const seen = new Set();
+                return out.filter(c => {
+                    const key = c.author + '|' + c.text;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+            }""")
+
+            skip = {"responder", "reply", "me gusta", "like", "ver traducción", "view translation", "ver respuestas", "view replies"}
+
+            for item in results:
+                if len(comments) >= 3: 
+                    break
+                    
+                author = item.get("author", "").strip()
+                text   = item.get("text", "").strip()
                 
-        except Exception as e:
-            print(f"\n⚠️ Error procesando a {user}: {e}")
-            continue
+                if not author or not text: continue
+                if text.lower() in skip: continue
+                if re.match(r'^\d+\s*(sem|h|d|w|min|s)\b', text.lower()): continue
+                if author.lower() == target_author.lower(): continue
+                
+                comments.append({"autor": author, "texto": text})
 
-    print(f"\n--- [FASE 4] Procesamiento terminado. Guardando archivo final ---")
-    
-    if datos_finales:
-        try:
-            df = pd.DataFrame(datos_finales)
-            nombre_final = f"REPORTE_FINAL_{target}.xlsx"
-            df.to_excel(nombre_final, index=False)
-            print(f"🏆 ¡ÉXITO TOTAL! Revisa el archivo: {nombre_final}")
         except Exception as e:
-            print(f"❌ Error fatal al guardar el Excel: {e}")
-            print("Tranquilo, te dejo los datos aquí en consola por si acaso:")
-            print(datos_finales)
-    else:
-        print("❌ No se recolectaron datos finales.")
+            print(f"      ⚠️ Error al parsear comentarios: {e}")
+
+        return caption, comments
+
+    async def run(self, profile: str) -> list[dict]:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=False)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
+            
+            await context.add_cookies([{
+                'name': 'sessionid',
+                'value': self.session_id,
+                'domain': '.instagram.com',
+                'path': '/',
+            }])
+
+            page = await context.new_page()
+
+            try:
+                post_links = await self.get_post_links(page, profile, limit=10)
+
+                for i, url in enumerate(post_links, 1):
+                    print(f"\n📸 Post {i}/10: {url}")
+                    await page.goto(url, wait_until="networkidle")
+                    
+
+                    await page.mouse.wheel(0, 500)
+                    await asyncio.sleep(random.uniform(3, 5))
+
+                    caption, comments = await self.extract_caption_and_comments(page, profile)
+
+                    post_data = {
+                        "url": url,
+                        "fecha_scraped": datetime.now().isoformat()[:10],
+                        "descripcion": caption,
+                        "comentarios": comments
+                    }
+                    
+                    self.posts.append(post_data)
+                    print(f"   ✓ Desc: {caption[:30]}... | Comentarios limpios: {len(comments)}")
+
+            except Exception as e:
+                print(f"[ERROR] {e}")
+            finally:
+                await browser.close()
+
+        return self.posts
+
+async def main():
+    print("=" * 50)
+    print(" 🕷️ Instagram Quimera Scraper - Iniciando")
+    print("=" * 50)
+
+    scraper = InstagramQuimera(TU_SESSION)
+    posts = await scraper.run(TARGET_PROFILE)
+
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(posts, f, ensure_ascii=False, indent=4)
+        
+    print("\n" + "=" * 50)
+    print(f" ✅ ¡Batahola terminada! Archivo {OUTPUT_JSON} guardado.")
+    print("=" * 50)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
