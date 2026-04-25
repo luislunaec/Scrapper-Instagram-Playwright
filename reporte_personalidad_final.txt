@@ -7,8 +7,7 @@ Como sistema experto en psicología conductual y análisis de Big Data, procedo 
 **Contexto del Análisis:**
 El análisis se basa en el contenido publicado por la usuaria (@amarantavp) y, crucialmente, en la naturaleza y el tono de los comentarios recibidos, así como en las marcas con las que se asocia. Se asume que la elección de contenido y la respuesta de la audiencia reflejan aspectos de su personalidad y comportamiento digital.
 
----
-
+--
 ### 1. Puntuación Cuantitativa (0-100%)
 
 *   **Apertura a la Experiencia (O):** 65%
